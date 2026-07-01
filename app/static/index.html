@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Med Journal Search App</title>
+  <style>
+    body { margin: 16px; font: 14px/1.4 sans-serif; max-width: 640px; }
+    h1 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+    .row { margin-bottom: 10px; }
+    label { display: block; margin-bottom: 2px; }
+    input, textarea, button { font: inherit; }
+    input[type="email"], input[type="text"], textarea {
+      width: 100%; box-sizing: border-box; padding: 4px; border: 1px solid #999;
+    }
+    textarea { min-height: 56px; resize: vertical; }
+    .btns { display: flex; flex-wrap: wrap; gap: 4px; }
+    .btns button {
+      padding: 2px 8px; border: 1px solid #999; background: #fff; cursor: pointer;
+    }
+    .btns button.on { background: #000; color: #fff; border-color: #000; }
+    .btns button:disabled, #submitBtn:disabled { opacity: 0.5; cursor: wait; }
+    #submitBtn { margin-top: 4px; padding: 4px 10px; }
+    #status { margin-top: 8px; white-space: pre-wrap; }
+    #status.error { color: #900; }
+    .note { color: #666; font-size: 12px; margin-top: -2px; margin-bottom: 4px; }
+    #results { margin-top: 12px; white-space: pre-wrap; font-size: 13px; line-height: 1.35; }
+    #results:empty { display: none; }
+    #results a { color: inherit; }
+    #results .title-en { font-weight: 700; }
+    #results .journal { font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Med Journal Search App</h1>
+
+  <div class="row">
+    <label>Journals</label>
+    <div class="note">Click to toggle.</div>
+    <div class="btns" id="journalBtns"></div>
+  </div>
+
+  <div class="row">
+    <label for="customUrls">Extra RSS URLs (optional)</label>
+    <textarea id="customUrls" placeholder="One URL per line"></textarea>
+  </div>
+
+  <div class="row">
+    <label for="keywords">Keywords (required)</label>
+    <div class="note">Comma-separated = OR.</div>
+    <input id="keywords" type="text" placeholder="ruxolitinib, PDAC" />
+  </div>
+
+  <div class="row">
+    <label>Paper count</label>
+    <div class="btns" id="countBtns"></div>
+  </div>
+
+  <div class="row">
+    <label>Summary length (Japanese chars)</label>
+    <div class="btns" id="summaryBtns"></div>
+  </div>
+
+  <div class="row">
+    <label for="emailTo">Email (optional)</label>
+    <div class="note">Leave blank to show results on this page.</div>
+    <input id="emailTo" type="email" placeholder="you@example.com" />
+  </div>
+
+  <button id="submitBtn" type="button">Search</button>
+  <div id="status">Fill in the form and click Search.</div>
+  <div id="results"></div>
+
+  <script>
+    const journalBtns = document.getElementById("journalBtns");
+    const customUrlsInput = document.getElementById("customUrls");
+    const keywordsInput = document.getElementById("keywords");
+    const emailInput = document.getElementById("emailTo");
+    const submitBtn = document.getElementById("submitBtn");
+    const countBtns = document.getElementById("countBtns");
+    const summaryBtns = document.getElementById("summaryBtns");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+
+    const selected = new Set();
+    let paperCount = 20;
+    let summaryLength = 200;
+
+    function esc(value) {
+      const d = document.createElement("div");
+      d.textContent = String(value ?? "");
+      return d.innerHTML;
+    }
+
+    function renderJournalButton(source) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = source.abbrev || source.name;
+      btn.title = source.name;
+      btn.dataset.id = source.id;
+      btn.classList.toggle("on", selected.has(source.id));
+      btn.addEventListener("click", () => {
+        if (selected.has(source.id)) selected.delete(source.id);
+        else selected.add(source.id);
+        btn.classList.toggle("on", selected.has(source.id));
+      });
+      journalBtns.appendChild(btn);
+    }
+
+    function renderCountButton(count) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = String(count);
+      btn.dataset.count = String(count);
+      btn.classList.toggle("on", count === paperCount);
+      btn.addEventListener("click", () => {
+        paperCount = count;
+        countBtns.querySelectorAll("button").forEach((el) => {
+          el.classList.toggle("on", Number(el.dataset.count) === paperCount);
+        });
+      });
+      countBtns.appendChild(btn);
+    }
+
+    function renderSummaryButton(length) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = String(length);
+      btn.dataset.length = String(length);
+      btn.classList.toggle("on", length === summaryLength);
+      btn.addEventListener("click", () => {
+        summaryLength = length;
+        summaryBtns.querySelectorAll("button").forEach((el) => {
+          el.classList.toggle("on", Number(el.dataset.length) === summaryLength);
+        });
+      });
+      summaryBtns.appendChild(btn);
+    }
+
+    function renderResults(papers) {
+      if (!papers || papers.length === 0) {
+        resultsEl.innerHTML = "";
+        return;
+      }
+      const header = "<div style=\"margin-bottom:8px;color:#666\">Ranked by clinical impact (likely to change standard of care)</div>";
+      resultsEl.innerHTML = header + papers.map((p) => {
+        const dateSuffix = p.published_date ? `, ${esc(p.published_date)}` : "";
+        return (
+          `<div style="margin-bottom:10px">` +
+          `${esc(p.rank)}. <span class="title-en">${esc(p.title_en)}</span> ` +
+          `<span class="journal">${esc(p.source_abbrev)}</span>${dateSuffix}<br>` +
+          `和訳: ${esc(p.title_ja)}<br>` +
+          `要約: ${esc(p.abstract_summary_ja)}<br>` +
+          `<a href="${esc(p.link)}">${esc(p.link)}</a>` +
+          `</div>`
+        );
+      }).join("");
+    }
+
+    async function readJsonResponse(res) {
+      const text = await res.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch {
+        if (!res.ok) throw new Error(text.slice(0, 300) || "Server error.");
+        throw new Error("Invalid server response.");
+      }
+    }
+
+    function parseCustomUrls(raw) {
+      return raw.split(/[\n,]/).map((p) => p.trim()).filter(Boolean);
+    }
+
+    function setBusy(busy) {
+      submitBtn.disabled = busy;
+      emailInput.disabled = busy;
+      keywordsInput.disabled = busy;
+      customUrlsInput.disabled = busy;
+      journalBtns.querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+      countBtns.querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+      summaryBtns.querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+    }
+
+    async function submitSearch() {
+      const emailTo = emailInput.value.trim();
+      const keywords = keywordsInput.value.trim();
+      const customUrls = parseCustomUrls(customUrlsInput.value);
+
+      if (!keywords) {
+        statusEl.className = "error";
+        statusEl.textContent = "Enter at least one keyword.";
+        keywordsInput.focus();
+        return;
+      }
+      if (selected.size === 0 && customUrls.length === 0) {
+        statusEl.className = "error";
+        statusEl.textContent = "Select a journal or add an RSS URL.";
+        return;
+      }
+
+      setBusy(true);
+      resultsEl.innerHTML = "";
+      statusEl.className = "";
+      statusEl.textContent = emailTo
+        ? `Processing… will email ${emailTo}`
+        : "Processing… results will show below.";
+
+      try {
+        const res = await fetch("/api/papers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email_to: emailTo,
+            source_ids: Array.from(selected),
+            custom_urls: customUrls,
+            keywords,
+            paper_count: paperCount,
+            summary_length: summaryLength,
+          }),
+        });
+        const data = await readJsonResponse(res);
+        if (!res.ok) throw new Error(data.detail || "Request failed.");
+        statusEl.textContent = data.message || `Done (${data.papers?.length || 0} papers).`;
+        if (data.displayed_on_screen || !emailTo) {
+          renderResults(data.papers);
+        }
+      } catch (err) {
+        statusEl.className = "error";
+        statusEl.textContent = err.message;
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function init() {
+      try {
+        const res = await fetch("/api/sources");
+        const sources = await readJsonResponse(res);
+        if (!res.ok || !Array.isArray(sources)) throw new Error("Failed to load journals.");
+        sources.forEach((source) => {
+          selected.add(source.id);
+          renderJournalButton(source);
+        });
+
+        const countRes = await fetch("/api/paper-counts");
+        const countData = await readJsonResponse(countRes);
+        if (countRes.ok && Array.isArray(countData.options)) {
+          paperCount = countData.default || 20;
+          countData.options.forEach((count) => renderCountButton(Number(count)));
+        }
+
+        const summaryRes = await fetch("/api/summary-lengths");
+        const summaryData = await readJsonResponse(summaryRes);
+        if (summaryRes.ok && Array.isArray(summaryData.options)) {
+          summaryLength = summaryData.default || 200;
+          summaryData.options.forEach((n) => renderSummaryButton(Number(n)));
+        }
+      } catch (err) {
+        statusEl.className = "error";
+        statusEl.textContent = err.message;
+      }
+    }
+
+    submitBtn.addEventListener("click", submitSearch);
+    init();
+  </script>
+</body>
+</html>
