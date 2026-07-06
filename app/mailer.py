@@ -38,7 +38,45 @@ def _paper_headline(paper: PaperLike) -> str:
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    value = os.getenv(name, default).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1].strip()
+    return value
+
+
+def _normalize_smtp_password(password: str) -> str:
+    # Gmail app passwords are often copied as "abcd efgh ijkl mnop".
+    return password.replace(" ", "")
+
+
+def _is_gmail_host(host: str) -> bool:
+    return "gmail.com" in host.lower()
+
+
+def _gmail_auth_hint(user: str) -> str:
+    lines = [
+        "Gmail のログインに失敗しました（ユーザー名またはパスワードが拒否されました）。",
+        "次を確認してください:",
+        "1. SMTP_USER には送信元の Gmail アドレス全体（例: name@gmail.com）を設定する",
+        "2. SMTP_PASSWORD には通常の Gmail パスワードではなく「アプリパスワード」を設定する",
+        "3. Google アカウントで2段階認証を有効にしてからアプリパスワードを作成する",
+        "   https://myaccount.google.com/apppasswords",
+    ]
+    if "@" not in user:
+        lines.append("※ 現在の SMTP_USER に @ が含まれていません。")
+    return "\n".join(lines)
+
+
+def _validate_smtp_credentials(host: str, user: str, password: str) -> Optional[str]:
+    if not _is_gmail_host(host):
+        return None
+    if "@" not in user:
+        return (
+            "SMTP_USER には Gmail のメールアドレス全体（@gmail.com まで）を設定してください。"
+        )
+    if not _normalize_smtp_password(password):
+        return "SMTP_PASSWORD を .env に設定してください。"
+    return None
 
 
 def has_mail_config() -> bool:
@@ -81,6 +119,43 @@ def _smtp_from() -> str:
 def _smtp_port() -> int:
     raw = _env("SMTP_PORT")
     return int(raw) if raw.isdigit() else 587
+
+
+def _smtp_use_ssl(port: int) -> bool:
+    explicit = _env("SMTP_USE_SSL").lower()
+    if explicit in ("1", "true", "yes"):
+        return True
+    if explicit in ("0", "false", "no"):
+        return False
+    return port == 465
+
+
+def _send_via_smtp(
+    *,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    mail_from: str,
+    recipient: str,
+    message: str,
+) -> None:
+    use_ssl = _smtp_use_ssl(port)
+    use_tls = _env("SMTP_USE_TLS", "true").lower() not in ("0", "false", "no")
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+            server.login(user, password)
+            server.sendmail(mail_from, [recipient], message)
+        return
+
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        server.ehlo()
+        if use_tls:
+            server.starttls()
+            server.ehlo()
+        server.login(user, password)
+        server.sendmail(mail_from, [recipient], message)
 
 
 def format_papers_plain(
@@ -184,13 +259,28 @@ def send_papers_email(
     host = _env("SMTP_HOST")
     port = _smtp_port()
     user = _env("SMTP_USER")
-    password = _env("SMTP_PASSWORD")
-    use_tls = _env("SMTP_USE_TLS", "true").lower() not in ("0", "false", "no")
+    password = _normalize_smtp_password(_env("SMTP_PASSWORD"))
+    mail_from = _smtp_from()
 
-    with smtplib.SMTP(host, port, timeout=30) as server:
-        if use_tls:
-            server.starttls()
-        server.login(user, password)
-        server.sendmail(_smtp_from(), [recipient], msg.as_string())
+    credential_error = _validate_smtp_credentials(host, user, password)
+    if credential_error:
+        raise ValueError(credential_error)
+
+    try:
+        _send_via_smtp(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            mail_from=mail_from,
+            recipient=recipient,
+            message=msg.as_string(),
+        )
+    except smtplib.SMTPAuthenticationError as exc:
+        if _is_gmail_host(host):
+            raise ValueError(_gmail_auth_hint(user)) from exc
+        raise ValueError(
+            "メールサーバーのログインに失敗しました。SMTP_USER と SMTP_PASSWORD を確認してください。"
+        ) from exc
 
     return recipient
