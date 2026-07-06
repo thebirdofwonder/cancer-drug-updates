@@ -53,17 +53,67 @@ def _is_gmail_host(host: str) -> bool:
     return "gmail.com" in host.lower()
 
 
-def _gmail_auth_hint(user: str) -> str:
+def _smtp_auth_error_message(host: str, user: str, password: str, exc: smtplib.SMTPAuthenticationError) -> str:
+    if not _is_gmail_host(host):
+        return (
+            "メールサーバーのログインに失敗しました。SMTP_USER と SMTP_PASSWORD を確認してください。"
+        )
+
+    detail = str(exc.args[-1]) if exc.args else str(exc)
+    if "Application-specific password required" in detail or "5.7.9" in detail:
+        return (
+            "Gmail は「通常のログインパスワード」では送信できません。"
+            " SMTP_PASSWORD にはアプリパスワードが必要です。\n\n"
+            "対処手順:\n"
+            "1. https://myaccount.google.com/apppasswords を開く\n"
+            "2. 2段階認証を有効にする\n"
+            "3. 新しいアプリパスワードを作成する\n"
+            "4. .env の SMTP_PASSWORD をその16文字に置き換える\n"
+            "5. ./start.sh でアプリを再起動する\n\n"
+            f"現在の SMTP_PASSWORD はスペース除去後 {len(_normalize_smtp_password(password))} 文字です。"
+            " アプリパスワードは通常16文字です。"
+        )
+
+    return _gmail_auth_hint(user, password)
+
+
+def _gmail_auth_hint(user: str, password: str) -> str:
+    normalized = _normalize_smtp_password(password)
     lines = [
         "Gmail のログインに失敗しました（ユーザー名またはパスワードが拒否されました）。",
-        "次を確認してください:",
-        "1. SMTP_USER には送信元の Gmail アドレス全体（例: name@gmail.com）を設定する",
-        "2. SMTP_PASSWORD には通常の Gmail パスワードではなく「アプリパスワード」を設定する",
-        "3. Google アカウントで2段階認証を有効にしてからアプリパスワードを作成する",
-        "   https://myaccount.google.com/apppasswords",
+        "",
+        "以前は動いていた場合、次のことが多いです:",
+        "・Google がアプリパスワードを無効にした（Gmailのパスワード変更、セキュリティ通知など）",
+        "・.env の SMTP_PASSWORD が途中で書き換わった、または余分な文字が入った",
+        "",
+        "対処手順:",
+        "1. https://myaccount.google.com/apppasswords を開く",
+        "2. 古い「メール」用アプリパスワードを削除する",
+        "3. 新しいアプリパスワードを作成する",
+        "4. .env の SMTP_PASSWORD を新しい値だけに置き換える（前後にスペースや引用符を付けない）",
+        "5. アプリを再起動する（./start.sh）",
+        "",
+        "確認ポイント:",
+        "1. SMTP_USER は送信元の Gmail アドレス全体（例: name@gmail.com）",
+        "2. SMTP_PASSWORD は通常の Gmail パスワードではなく「アプリパスワード」",
+        "3. Google アカウントで2段階認証が有効であること",
     ]
     if "@" not in user:
         lines.append("※ 現在の SMTP_USER に @ が含まれていません。")
+    if len(normalized) == 19:
+        lines.append(
+            "※ SMTP_PASSWORD が19文字です。"
+            " Google表示の「abcd efgh ijkl mnop」のようにスペース付き16文字を"
+            " そのまま貼ると19文字になり、スペース除去後は16文字になります。"
+            " いまの値はスペースなし19文字のため、文字数が合っていない可能性があります。"
+        )
+    elif len(normalized) != 16:
+        lines.append(
+            f"※ SMTP_PASSWORD はスペース除去後 {len(normalized)} 文字です。"
+            " Gmail のアプリパスワードは通常16文字です。"
+        )
+    lines.append("")
+    lines.append("接続テスト: python3 scripts/test_smtp.py")
     return "\n".join(lines)
 
 
@@ -278,7 +328,7 @@ def send_papers_email(
         )
     except smtplib.SMTPAuthenticationError as exc:
         if _is_gmail_host(host):
-            raise ValueError(_gmail_auth_hint(user)) from exc
+            raise ValueError(_smtp_auth_error_message(host, user, password, exc)) from exc
         raise ValueError(
             "メールサーバーのログインに失敗しました。SMTP_USER と SMTP_PASSWORD を確認してください。"
         ) from exc

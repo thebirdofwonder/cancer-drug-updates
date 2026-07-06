@@ -71,6 +71,28 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ブラウザで http://127.0.0.1:8000 を開きます。
 
+## メール送信が失敗するとき
+
+以前は動いていたのに `535 Username and Password not accepted` が出る場合、**Google 側でアプリパスワードが無効になった**ことが多いです（Gmail のパスワード変更、セキュリティ通知など）。
+
+### 確認コマンド（Cursor のターミナル）
+
+```bash
+cd ~/Projects/cancer-drug-updates
+source .venv/bin/activate
+python3 scripts/test_smtp.py
+```
+
+`OK` と出れば設定は正しいです。`NG` の場合は次を試してください。
+
+1. https://myaccount.google.com/apppasswords を開く
+2. 古いアプリパスワードを削除
+3. 新しいアプリパスワードを作成
+4. `.env` の `SMTP_PASSWORD` を新しい値に置き換え（スペース付きでも可）
+5. `./start.sh` でアプリを再起動
+
+Gmail のアプリパスワードは **スペースを除いて16文字** です。スペースなしで19文字になっている場合は、余分な文字が入っている可能性があります。
+
 ## 注意
 
 - 要約・翻訳はAI（Anthropic Claude）が生成します。必ず原文も確認してください。
